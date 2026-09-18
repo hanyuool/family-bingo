@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>가족 빙고 게임</title>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; background: #f4f7f6; margin: 0; padding: 20px; }
+    .container { max-width: 480px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    
+    /* 로딩 화면 */
+    #loading-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; }
+    .spinner { width: 50px; height: 50px; border: 5px solid #f3f3f3; border-top: 5px solid #10ac84; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .loading-text { font-weight: bold; font-size: 1.1rem; color: #2d3436; margin-bottom: 8px; }
+    .loading-subtext { font-size: 0.85rem; color: #636e72; line-height: 1.4; }
+
+    /* UI 스타일 */
+    .form-group { margin-bottom: 15px; text-align: left; }
+    .form-group label { display: block; font-weight: bold; margin-bottom: 4px; }
+    .status-board { margin: 15px 0; padding: 12px; background: #eef2f5; border-radius: 8px; font-weight: bold; }
+    .player-list { list-style: none; padding: 0; margin: 10px 0; text-align: left; }
+    .player-list li { padding: 8px 12px; background: #f8f9fa; border: 1px solid #e9ecef; margin-bottom: 4px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+    .badge-host { background: #ff9f43; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    
+    .grid { display: grid; gap: 6px; margin-top: 20px; }
+    .cell { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #fff; border: 2px solid #ddd; font-size: 1.8rem; font-weight: bold; border-radius: 8px; cursor: pointer; transition: 0.2s; user-select: none; }
+    .cell.selected { background: #ff6b6b; color: white; border-color: #ee5253; }
+    
+    button { width: 100%; padding: 12px; font-size: 1rem; border: none; background: #10ac84; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 8px; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    input, select { width: 100%; padding: 10px; font-size: 1rem; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+    .controls { display: flex; gap: 8px; margin-bottom: 15px; }
+    .btn-secondary { background: #54a0ff; }
+
+    /* 게임 화면 플레이어 목록 */
+    .game-players { margin: 15px 0; padding: 12px; background: #eef2f5; border-radius: 8px; }
+    .game-players-title { font-weight: bold; margin-bottom: 8px; font-size: 0.9rem; color: #636e72; }
+    .game-players-list { display: flex; gap: 8px; flex-wrap: wrap; }
+    .player-badge { padding: 8px 12px; background: white; border: 2px solid #ddd; border-radius: 6px; font-size: 0.9rem; font-weight: bold; transition: 0.3s; }
+    .player-badge.current-turn { background: #ff9f43; color: white; border-color: #ff9f43; box-shadow: 0 0 8px rgba(255, 159, 67, 0.5); }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>🎲 즐거운 가족 빙고</h2>
+  
+  <!-- 1. 서버 접속 로딩 화면 -->
+  <div id="loading-screen">
+    <div class="spinner"></div>
+    <div class="loading-text">서버에 연결하는 중입니다...</div>
+    <div class="loading-subtext">서버가 휴식 중일 경우 깨어나는 데<br>약 15초 ~ 30초 정도 소요될 수 있습니다. ☕</div>
+  </div>
+
+  <!-- 2. 닉네임 입력 화면 -->
+  <div id="login-area" style="display:none;">
+    <div class="form-group">
+      <label for="nickname">닉네임</label>
+      <input type="text" id="nickname" placeholder="닉네임 입력 (예: 아빠)">
+    </div>
+    <button onclick="joinLobby()">입장하기</button>
+  </div>
+
+  <!-- 3. 대기실 화면 -->
+  <div id="lobby-area" style="display:none;">
+    <h3>방 대기실</h3>
+    <div class="form-group" id="host-settings" style="display:none;">
+      <label for="board-size">빙고판 크기 설정 (방장 전용)</label>
+      <select id="board-size">
+        <option value="3">3 x 3 (3줄 승리)</option>
+        <option value="4">4 x 4 (4줄 승리)</option>
+        <option value="5" selected>5 x 5 (5줄 승리 - 기본)</option>
+        <option value="6">6 x 6 (6줄 승리)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>현재 참가자 목록 (<span id="player-count">0</span>명)</label>
+      <ul class="player-list" id="player-list-ul"></ul>
+    </div>
+
+    <div id="host-controls" style="display:none;">
+      <button onclick="startGame()">👑 게임 시작하기</button>
+    </div>
+    <div id="guest-msg" style="color: #636e72; font-size: 0.9rem; margin-top: 15px;">
+      방장이 게임을 시작하기를 기다리고 있습니다...
+    </div>
+  </div>
+
+  <!-- 4. 게임 진행 영역 -->
+  <div id="game-area" style="display:none;">
+    <div style="text-align: center; font-size: 1.3rem; font-weight: bold; margin-bottom: 15px; color: #2d3436;">
+      👤 <span id="my-nickname" style="color: #10ac84;">-</span>
+    </div>
+
+    <div class="status-board">
+      <div>현재 턴: <span id="current-turn" style="color:#ee5253;">-</span></div>
+      <div>내 빙고 개수: <span id="bingo-count" style="color:#10ac84;">0</span> / <span id="target-count">5</span></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn-secondary" onclick="generateRandomBoard()">🎲 판 다시 섞기</button>
+    </div>
+
+    <div class="grid" id="bingo-board"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+  let boardData = [];
+  let drawnNumbers = new Set();
+  let SIZE = 5;
+  let targetBingoCount = 5;
+  let isHost = false;
+  let players = [];
+  let currentTurnPlayerName = '';
+  let myNickname = '';
+
+  socket.on('connect', () => {
+    document.getElementById('loading-screen').style.display = 'none';
+    document.getElementById('login-area').style.display = 'block';
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('loading-screen').style.display = 'flex';
+    document.getElementById('login-area').style.display = 'none';
+    document.getElementById('lobby-area').style.display = 'none';
+    document.getElementById('game-area').style.display = 'none';
+    document.querySelector('.loading-text').innerText = '서버와의 연결이 끊어졌습니다. 재연결 중...';
+  });
+
+  function joinLobby() {
+    const name = document.getElementById('nickname').value.trim();
+    if (!name) return alert('닉네임을 입력하세요!');
+    myNickname = name;
+    socket.emit('joinGame', name);
+  }
+
+  socket.on('joinedSuccess', (data) => {
+    isHost = data.isHost;
+    document.getElementById('login-area').style.display = 'none';
+    document.getElementById('lobby-area').style.display = 'block';
+  });
+
+  // 대기실 참가자 목록 업데이트
+  socket.on('updateLobby', (data) => {
+    const listEl = document.getElementById('player-list-ul');
+    listEl.innerHTML = '';
+    document.getElementById('player-count').innerText = data.players.length;
+
+    // 내가 방장인지 여부 재확인
+    isHost = (socket.id === data.hostId);
+    if (isHost) {
+      document.getElementById('host-settings').style.display = 'block';
+      document.getElementById('host-controls').style.display = 'block';
+      document.getElementById('guest-msg').style.display = 'none';
+    } else {
+      document.getElementById('host-settings').style.display = 'none';
+      document.getElementById('host-controls').style.display = 'none';
+      document.getElementById('guest-msg').style.display = 'block';
+    }
+
+    data.players.forEach(p => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${p.nickname}</span> ${p.id === data.hostId ? '<span class="badge-host">방장</span>' : ''}`;
+      listEl.appendChild(li);
+    });
+  });
+
+  function startGame() {
+    const size = document.getElementById('board-size').value;
+    socket.emit('startGame', size);
+  }
+
+  // 게임 시작 이벤트 받기
+  socket.on('gameStarted', (data) => {
+    SIZE = data.boardSize;
+    targetBingoCount = data.targetBingoCount;
+    drawnNumbers = new Set(data.drawnNumbers);
+    players = data.players;
+    currentTurnPlayerName = data.currentTurn;
+
+    document.getElementById('target-count').innerText = targetBingoCount;
+    document.getElementById('current-turn').innerText = data.currentTurn;
+    document.getElementById('my-nickname').innerText = myNickname;
+
+    document.getElementById('lobby-area').style.display = 'none';
+    document.getElementById('game-area').style.display = 'block';
+
+    generateRandomBoard();
+  });
+
+  function generateRandomBoard() {
+    const totalCells = SIZE * SIZE;
+    const numbers = Array.from({length: totalCells}, (_, i) => i + 1).sort(() => Math.random() - 0.5);
+
+    boardData = [];
+    for (let i = 0; i < SIZE; i++) {
+      boardData.push(numbers.slice(i * SIZE, (i + 1) * SIZE));
+    }
+    renderBoard();
+  }
+
+  function renderBoard() {
+    const boardEl = document.getElementById('bingo-board');
+    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, 1fr)`;
+    boardEl.innerHTML = '';
+    
+    for (let r = 0; r < SIZE; r++) {
+      for (let c = 0; c < SIZE; c++) {
+        const val = boardData[r][c];
+        const cell = document.createElement('div');
+        cell.className = 'cell' + (drawnNumbers.has(val) ? ' selected' : '');
+        cell.innerText = val;
+        cell.onclick = () => selectNum(val);
+        boardEl.appendChild(cell);
+      }
+    }
+    checkBingo();
+  }
+
+  function selectNum(num) {
+    if (drawnNumbers.has(num)) return;
+    socket.emit('selectNumber', num);
+  }
+
+  function checkBingo() {
+    if (boardData.length === 0) return;
+    let count = 0;
+
+    for (let i = 0; i < SIZE; i++) {
+      if (boardData[i].every(n => drawnNumbers.has(n))) count++;
+      if (boardData.map(r => r[i]).every(n => drawnNumbers.has(n))) count++;
+    }
+
+    let diag1 = true;
+    for (let i = 0; i < SIZE; i++) {
+      if (!drawnNumbers.has(boardData[i][i])) { diag1 = false; break; }
+    }
+    if (diag1) count++;
+
+    let diag2 = true;
+    for (let i = 0; i < SIZE; i++) {
+      if (!drawnNumbers.has(boardData[i][SIZE - 1 - i])) { diag2 = false; break; }
+    }
+    if (diag2) count++;
+
+    document.getElementById('bingo-count').innerText = count;
+
+    if (count >= targetBingoCount) {
+      socket.emit('claimBingo', { bingoCount: count, targetBingoCount });
+    }
+  }
+
+  socket.on('numberSelected', (data) => {
+    drawnNumbers = new Set(data.drawnNumbers);
+    currentTurnPlayerName = data.nextTurn;
+    document.getElementById('current-turn').innerText = data.nextTurn;
+    renderBoard();
+  });
+
+  socket.on('gameOver', (msg) => {
+    alert(msg);
+    boardData = [];
+    drawnNumbers.clear();
+    document.getElementById('game-area').style.display = 'none';
+    document.getElementById('lobby-area').style.display = 'block';
+  });
+
+  socket.on('playerLeft', (data) => {
+    if (data.players.length === 0) {
+      alert('모든 플레이어가 퇴장했습니다. 게임이 종료됩니다.');
+      location.reload();
+      return;
+    }
+    players = data.players;
+    drawnNumbers = new Set(data.drawnNumbers);
+    currentTurnPlayerName = data.currentTurn;
+    document.getElementById('current-turn').innerText = data.currentTurn;
+    renderBoard();
+  });
+
+  socket.on('errorMsg', (msg) => alert(msg));
+</script>
+</body>
+</html>

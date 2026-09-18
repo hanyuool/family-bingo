@@ -1,0 +1,13 @@
+{
+    "name": "family-bingo",
+    "version": "1.0.0",
+    "description": "가족용 3인 실시간 멀티플레이어 빙고 게임",
+    "main": "server.js",
+    "scripts": {
+      "start": "node server.js"
+    },
+    "dependencies": {
+      "express": "^4.19.2",
+      "socket.io": "^4.7.5"
+    }
+  }
