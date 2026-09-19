@@ -25,6 +25,7 @@
     
     .grid { display: grid; gap: 6px; margin-top: 20px; }
     .cell { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #fff; border: 2px solid #ddd; font-size: 1.5rem; font-weight: bold; border-radius: 8px; cursor: pointer; transition: 0.2s; user-select: none; box-sizing: border-box; }
+    .grid.word-board .cell { min-width: 0; padding: 3px; font-size: var(--word-size); line-height: 1.2; overflow-wrap: anywhere; }
     .cell.selected { background: #ff6b6b; color: white; border-color: #ee5253; }
     
     button { width: 100%; padding: 12px; font-size: 1rem; border: none; background: #10ac84; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 8px; }
@@ -73,6 +74,11 @@
         <option value="5" selected>5 x 5 (5줄 승리 - 기본)</option>
         <option value="6">6 x 6 (6줄 승리)</option>
       </select>
+      <label for="category" style="margin-top: 12px;">카테고리 (방장 전용)</label>
+      <select id="category">
+        <option value="numbers" selected>숫자</option>
+        <option value="snacks">과자</option>
+      </select>
     </div>
 
     <div class="form-group">
@@ -95,12 +101,20 @@
     </div>
 
     <div class="status-board">
+      <div>카테고리: <span id="game-category">숫자</span></div>
       <div>현재 턴: <span id="current-turn" style="color:#ee5253;">-</span></div>
       <div>내 빙고 개수: <span id="bingo-count" style="color:#10ac84;">0</span> / <span id="target-count">5</span></div>
     </div>
 
+    <div class="game-players">
+      <div class="game-players-title">참가자별 누적 승수</div>
+      <div class="game-players-list" id="game-scores" aria-live="polite"></div>
+    </div>
+
+    <div id="preparation-status" role="status"></div>
     <div class="controls">
-      <button class="btn-secondary" onclick="generateRandomBoard()">🎲 판 다시 섞기</button>
+      <button id="shuffle-board" class="btn-secondary" onclick="generateRandomBoard()" disabled>🎲 판 다시 섞기</button>
+      <button id="confirm-board" onclick="confirmBoard()" disabled>✅ 빙고판 확정</button>
     </div>
 
     <div class="grid" id="bingo-board"></div>
@@ -111,6 +125,9 @@
 <script>
   const socket = io();
   let boardData = [];
+  let boardItems = [];
+  let itemLabels = new Map();
+  let category = 'numbers';
   let drawnNumbers = new Set();
   let SIZE = 5;
   let targetBingoCount = 5;
@@ -118,6 +135,39 @@
   let players = [];
   let currentTurnPlayerName = '';
   let myNickname = '';
+  let gamePhase = 'lobby';
+  let boardConfirmed = false;
+  let preparationDeadline = 0;
+  let preparationInterval = null;
+
+  function updatePreparationControls() {
+    const remaining = Math.max(0, Math.ceil((preparationDeadline - performance.now()) / 1000));
+    const canChange = gamePhase === 'preparing' && !boardConfirmed && remaining > 0;
+    document.getElementById('shuffle-board').disabled = !canChange;
+    document.getElementById('confirm-board').disabled = !canChange;
+    if (gamePhase === 'preparing') {
+      document.getElementById('preparation-status').innerText = boardConfirmed
+        ? `빙고판 확정 완료! 다른 참가자를 기다리는 중입니다. (${remaining}초)`
+        : remaining > 0 ? `빙고판을 바꾸고 확정하세요. ${remaining}초 후 자동 확정됩니다.`
+        : '빙고판이 자동 확정되었습니다. 게임 시작을 기다리는 중입니다.';
+    }
+  }
+
+  function confirmBoard() {
+    if (gamePhase !== 'preparing' || boardConfirmed || performance.now() >= preparationDeadline) return;
+    boardConfirmed = true;
+    updatePreparationControls();
+    socket.emit('confirmBoard');
+  }
+
+  function resetPreparation() {
+    clearInterval(preparationInterval);
+    preparationInterval = null;
+    gamePhase = 'lobby';
+    boardConfirmed = false;
+    document.getElementById('preparation-status').innerText = '';
+    updatePreparationControls();
+  }
 
   socket.on('connect', () => {
     document.getElementById('loading-screen').style.display = 'none';
@@ -125,6 +175,7 @@
   });
 
   socket.on('disconnect', () => {
+    resetPreparation();
     document.getElementById('loading-screen').style.display = 'flex';
     document.getElementById('login-area').style.display = 'none';
     document.getElementById('lobby-area').style.display = 'none';
@@ -145,8 +196,21 @@
     document.getElementById('lobby-area').style.display = 'block';
   });
 
+  function renderScores() {
+    const scores = document.getElementById('game-scores');
+    scores.innerHTML = '';
+    players.forEach(player => {
+      const badge = document.createElement('div');
+      badge.className = 'player-badge';
+      badge.innerText = `${player.isHost ? '👑 ' : ''}${player.nickname} · ${player.wins ?? 0}승`;
+      scores.appendChild(badge);
+    });
+  }
+
   // 대기실 참가자 목록 업데이트
   socket.on('updateLobby', (data) => {
+    players = data.players;
+    renderScores();
     const listEl = document.getElementById('player-list-ul');
     listEl.innerHTML = '';
     document.getElementById('player-count').innerText = data.players.length;
@@ -165,37 +229,77 @@
 
     data.players.forEach(p => {
       const li = document.createElement('li');
-      li.innerHTML = `<span>${p.nickname}</span> ${p.id === data.hostId ? '<span class="badge-host">방장</span>' : ''}`;
+      const name = document.createElement('span');
+      name.innerText = `${p.nickname} · ${p.wins ?? 0}승`;
+      li.appendChild(name);
+      if (p.id === data.hostId) {
+        const badge = document.createElement('span');
+        badge.className = 'badge-host';
+        badge.innerText = '방장';
+        li.appendChild(badge);
+      }
       listEl.appendChild(li);
     });
   });
 
   function startGame() {
     const size = document.getElementById('board-size').value;
-    socket.emit('startGame', size);
+    socket.emit('startGame', { boardSize: Number(size), category: document.getElementById('category').value });
   }
 
   // 게임 시작 이벤트 받기
   socket.on('gameStarted', (data) => {
     SIZE = data.boardSize;
+    category = data.category;
+    boardItems = data.boardItems;
+    itemLabels = new Map(boardItems.map(item => [item.id, item.label]));
+    document.getElementById('game-category').innerText = category === 'snacks' ? '과자' : '숫자';
     targetBingoCount = data.targetBingoCount;
     drawnNumbers = new Set(data.drawnNumbers);
     players = data.players;
-    currentTurnPlayerName = data.currentTurn;
+    renderScores();
+    currentTurnPlayerName = '';
+    resetPreparation();
+    gamePhase = 'preparing';
+    preparationDeadline = performance.now() + data.preparationDuration;
 
     document.getElementById('target-count').innerText = targetBingoCount;
-    document.getElementById('current-turn').innerText = data.currentTurn;
+    document.getElementById('current-turn').innerText = '빙고판 준비 중';
     document.getElementById('my-nickname').innerText = myNickname;
 
     document.getElementById('lobby-area').style.display = 'none';
     document.getElementById('game-area').style.display = 'block';
 
     generateRandomBoard();
+    updatePreparationControls();
+    preparationInterval = setInterval(updatePreparationControls, 100);
+  });
+
+  socket.on('preparationUpdated', (data) => {
+    if (gamePhase !== 'preparing') return;
+    if (data.confirmedPlayerIds.includes(socket.id)) boardConfirmed = true;
+    updatePreparationControls();
+  });
+
+  socket.on('playStarted', (data) => {
+    clearInterval(preparationInterval);
+    preparationInterval = null;
+    boardConfirmed = true;
+    gamePhase = 'playing';
+    currentTurnPlayerName = data.currentTurn;
+    document.getElementById('current-turn').innerText = data.currentTurn;
+    document.getElementById('preparation-status').innerText = '빙고판이 확정되었습니다. 게임을 시작하세요!';
+    updatePreparationControls();
   });
 
   function generateRandomBoard() {
-    const totalCells = SIZE * SIZE;
-    const numbers = Array.from({length: totalCells}, (_, i) => i + 1).sort(() => Math.random() - 0.5);
+    if (gamePhase !== 'preparing' || boardConfirmed || performance.now() >= preparationDeadline) return;
+    // 서버가 내 판에 추첨한 항목은 유지하고 배치만 섞습니다.
+    const numbers = boardItems.map(item => item.id);
+    for (let i = numbers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
+    }
 
     boardData = [];
     for (let i = 0; i < SIZE; i++) {
@@ -206,7 +310,9 @@
 
   function renderBoard() {
     const boardEl = document.getElementById('bingo-board');
-    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, 1fr)`;
+    boardEl.style.gridTemplateColumns = `repeat(${SIZE}, minmax(0, 1fr))`;
+    boardEl.classList.toggle('word-board', category === 'snacks');
+    boardEl.style.setProperty('--word-size', SIZE >= 5 ? 'clamp(11px, 3vw, 15px)' : 'clamp(14px, 4vw, 20px)');
     boardEl.innerHTML = '';
     
     for (let r = 0; r < SIZE; r++) {
@@ -214,7 +320,7 @@
         const val = boardData[r][c];
         const cell = document.createElement('div');
         cell.className = 'cell' + (drawnNumbers.has(val) ? ' selected' : '');
-        cell.innerText = val;
+        cell.innerText = itemLabels.get(val);
         cell.onclick = () => selectNum(val);
         boardEl.appendChild(cell);
       }
@@ -223,7 +329,7 @@
   }
 
   function selectNum(num) {
-    if (drawnNumbers.has(num)) return;
+    if (gamePhase !== 'playing' || drawnNumbers.has(num)) return;
     socket.emit('selectNumber', num);
   }
 
@@ -250,7 +356,7 @@
 
     document.getElementById('bingo-count').innerText = count;
 
-    if (count >= targetBingoCount) {
+    if (gamePhase === 'playing' && count >= targetBingoCount) {
       socket.emit('claimBingo', { bingoCount: count, targetBingoCount });
     }
   }
@@ -263,6 +369,7 @@
   });
 
   socket.on('gameOver', (msg) => {
+    resetPreparation();
     alert(msg);
     boardData = [];
     drawnNumbers.clear();
@@ -277,9 +384,10 @@
       return;
     }
     players = data.players;
+    renderScores();
     drawnNumbers = new Set(data.drawnNumbers);
     currentTurnPlayerName = data.currentTurn;
-    document.getElementById('current-turn').innerText = data.currentTurn;
+    document.getElementById('current-turn').innerText = gamePhase === 'preparing' ? '빙고판 준비 중' : data.currentTurn;
     renderBoard();
   });
 

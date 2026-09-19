@@ -1,0 +1,204 @@
+{
+  "snacks": [
+    {
+      "id": "snack-01",
+      "label": "새우깡"
+    },
+    {
+      "id": "snack-02",
+      "label": "꼬깔콘"
+    },
+    {
+      "id": "snack-03",
+      "label": "포카칩"
+    },
+    {
+      "id": "snack-04",
+      "label": "초코파이"
+    },
+    {
+      "id": "snack-05",
+      "label": "빼빼로"
+    },
+    {
+      "id": "snack-06",
+      "label": "오레오"
+    },
+    {
+      "id": "snack-07",
+      "label": "고래밥"
+    },
+    {
+      "id": "snack-08",
+      "label": "홈런볼"
+    },
+    {
+      "id": "snack-09",
+      "label": "맛동산"
+    },
+    {
+      "id": "snack-10",
+      "label": "짱구"
+    },
+    {
+      "id": "snack-11",
+      "label": "양파링"
+    },
+    {
+      "id": "snack-12",
+      "label": "감자깡"
+    },
+    {
+      "id": "snack-13",
+      "label": "자갈치"
+    },
+    {
+      "id": "snack-14",
+      "label": "오징어땅콩"
+    },
+    {
+      "id": "snack-15",
+      "label": "칸쵸"
+    },
+    {
+      "id": "snack-16",
+      "label": "치토스"
+    },
+    {
+      "id": "snack-17",
+      "label": "썬칩"
+    },
+    {
+      "id": "snack-18",
+      "label": "콘칩"
+    },
+    {
+      "id": "snack-19",
+      "label": "죠리퐁"
+    },
+    {
+      "id": "snack-20",
+      "label": "사또밥"
+    },
+    {
+      "id": "snack-21",
+      "label": "쌀로별"
+    },
+    {
+      "id": "snack-22",
+      "label": "꿀꽈배기"
+    },
+    {
+      "id": "snack-23",
+      "label": "바나나킥"
+    },
+    {
+      "id": "snack-24",
+      "label": "허니버터칩"
+    },
+    {
+      "id": "snack-25",
+      "label": "뽀또"
+    },
+    {
+      "id": "snack-26",
+      "label": "에이스"
+    },
+    {
+      "id": "snack-27",
+      "label": "참크래커"
+    },
+    {
+      "id": "snack-28",
+      "label": "버터링"
+    },
+    {
+      "id": "snack-29",
+      "label": "다이제"
+    },
+    {
+      "id": "snack-30",
+      "label": "빈츠"
+    },
+    {
+      "id": "snack-31",
+      "label": "마가렛트"
+    },
+    {
+      "id": "snack-32",
+      "label": "카스타드"
+    },
+    {
+      "id": "snack-33",
+      "label": "몽쉘"
+    },
+    {
+      "id": "snack-34",
+      "label": "오예스"
+    },
+    {
+      "id": "snack-35",
+      "label": "후렌치파이"
+    },
+    {
+      "id": "snack-36",
+      "label": "엄마손파이"
+    },
+    {
+      "id": "snack-37",
+      "label": "쿠크다스"
+    },
+    {
+      "id": "snack-38",
+      "label": "화이트하임"
+    },
+    {
+      "id": "snack-39",
+      "label": "초코하임"
+    },
+    {
+      "id": "snack-40",
+      "label": "웨하스"
+    },
+    {
+      "id": "snack-41",
+      "label": "빠다코코낫"
+    },
+    {
+      "id": "snack-42",
+      "label": "롯데샌드"
+    },
+    {
+      "id": "snack-43",
+      "label": "야채크래커"
+    },
+    {
+      "id": "snack-44",
+      "label": "아이비"
+    },
+    {
+      "id": "snack-45",
+      "label": "프링글스"
+    },
+    {
+      "id": "snack-46",
+      "label": "알새우칩"
+    },
+    {
+      "id": "snack-47",
+      "label": "인디안밥"
+    },
+    {
+      "id": "snack-48",
+      "label": "벌집핏자"
+    },
+    {
+      "id": "snack-49",
+      "label": "닭다리"
+    },
+    {
+      "id": "snack-50",
+      "label": "스윙칩"
+    }
+  ]
+}
