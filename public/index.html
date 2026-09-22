@@ -36,10 +36,20 @@
     .room-empty { padding: 22px 10px; color: #636e72; background: #f8f9fa; border-radius: 10px; }
     .section-note { color: #636e72; font-size: 0.85rem; line-height: 1.5; }
     
-    .grid { display: grid; gap: 6px; margin-top: 20px; }
+    .board-wrap { position: relative; margin-top: 8px; overflow: hidden; border-radius: 8px; }
+    .grid { display: grid; gap: 6px; }
     .cell { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #fff; border: 2px solid #ddd; font-size: 1.5rem; font-weight: bold; border-radius: 8px; cursor: pointer; transition: 0.2s; user-select: none; box-sizing: border-box; }
     .grid.word-board .cell { min-width: 0; padding: 3px; font-size: var(--word-size); line-height: 1.2; overflow-wrap: anywhere; }
     .cell.selected { background: #ff6b6b; color: white; border-color: #ee5253; }
+    .bingo-lines { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+    .bingo-line { position: absolute; height: 5px; background: #111; border: 1px solid rgba(255,255,255,0.75); border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,0.45); transform-origin: center; }
+    .selection-notice { display: none; margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; font-size: 0.92rem; font-weight: bold; line-height: 1.4; }
+    .selection-notice.present { display: block; color: #087f5b; background: #e6fcf5; border: 1px solid #96f2d7; }
+    .selection-notice.missing { display: block; color: #c92a2a; background: #fff5f5; border: 1px solid #ffa8a8; }
+    .game-result-modal { display: none; position: fixed; inset: 0; z-index: 20; align-items: center; justify-content: center; padding: 20px; background: rgba(0,0,0,0.45); box-sizing: border-box; }
+    .game-result-card { width: min(360px, 100%); padding: 24px 20px; background: white; border-radius: 14px; box-shadow: 0 12px 35px rgba(0,0,0,0.3); }
+    .game-result-card h3 { margin: 0 0 12px; font-size: 1.35rem; }
+    .game-result-card p { margin: 0 0 16px; color: #2d3436; font-weight: bold; line-height: 1.5; }
     
     button { width: 100%; padding: 12px; font-size: 1rem; border: none; background: #10ac84; color: white; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 8px; }
     button:disabled { background: #ccc; cursor: not-allowed; }
@@ -148,7 +158,19 @@
       <button id="confirm-board" onclick="confirmBoard()" disabled>✅ 빙고판 확정</button>
     </div>
 
-    <div class="grid" id="bingo-board"></div>
+    <div id="selection-notice" class="selection-notice" role="status" aria-live="polite"></div>
+    <div class="board-wrap">
+      <div class="grid" id="bingo-board"></div>
+      <div id="bingo-lines" class="bingo-lines" aria-hidden="true"></div>
+    </div>
+
+    <div id="game-result-modal" class="game-result-modal" role="dialog" aria-modal="true" aria-labelledby="game-result-title">
+      <div class="game-result-card">
+        <h3 id="game-result-title">🎉 게임 종료</h3>
+        <p id="game-result-message"></p>
+        <button id="game-result-confirm" onclick="returnToLobby()">확인</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -200,6 +222,12 @@
     boardConfirmed = false;
     document.getElementById('preparation-status').innerText = '';
     updatePreparationControls();
+  }
+
+  function clearSelectionNotice() {
+    const notice = document.getElementById('selection-notice');
+    notice.className = 'selection-notice';
+    notice.innerText = '';
   }
 
   socket.on('connect', () => {
@@ -328,6 +356,8 @@
     currentRoom = null;
     myNickname = '';
     players = [];
+    clearSelectionNotice();
+    renderBingoLines([]);
     document.getElementById('nickname').value = '';
     document.getElementById('login-area').style.display = 'none';
     document.getElementById('lobby-area').style.display = 'none';
@@ -413,6 +443,8 @@
     targetBingoCount = data.targetBingoCount;
     drawnNumbers = new Set(data.drawnNumbers);
     players = data.players;
+    clearSelectionNotice();
+    renderBingoLines([]);
     renderScores();
     currentTurnPlayerName = '';
     resetPreparation();
@@ -484,6 +516,36 @@
     checkBingo();
   }
 
+  function renderBingoLines(completedLines) {
+    const lines = document.getElementById('bingo-lines');
+    lines.innerHTML = '';
+    const inset = 50 / SIZE;
+    const straightLength = 100 - (inset * 2);
+
+    completedLines.forEach(completed => {
+      const line = document.createElement('div');
+      line.className = 'bingo-line';
+      if (completed.type === 'row') {
+        line.style.left = `${inset}%`;
+        line.style.top = `${((completed.index + 0.5) / SIZE) * 100}%`;
+        line.style.width = `${straightLength}%`;
+        line.style.transform = 'translateY(-50%)';
+      } else if (completed.type === 'column') {
+        line.style.left = `${((completed.index + 0.5) / SIZE) * 100}%`;
+        line.style.top = `${inset}%`;
+        line.style.width = '5px';
+        line.style.height = `${straightLength}%`;
+        line.style.transform = 'translateX(-50%)';
+      } else {
+        line.style.left = '50%';
+        line.style.top = '50%';
+        line.style.width = `${straightLength * Math.SQRT2}%`;
+        line.style.transform = `translate(-50%, -50%) rotate(${completed.type === 'diagonal' ? 45 : -45}deg)`;
+      }
+      lines.appendChild(line);
+    });
+  }
+
   function selectNum(num) {
     if (gamePhase !== 'playing' || drawnNumbers.has(num)) return;
     socket.emit('selectNumber', num);
@@ -491,25 +553,27 @@
 
   function checkBingo() {
     if (boardData.length === 0) return;
-    let count = 0;
+    const completedLines = [];
 
     for (let i = 0; i < SIZE; i++) {
-      if (boardData[i].every(n => drawnNumbers.has(n))) count++;
-      if (boardData.map(r => r[i]).every(n => drawnNumbers.has(n))) count++;
+      if (boardData[i].every(n => drawnNumbers.has(n))) completedLines.push({ type: 'row', index: i });
+      if (boardData.map(r => r[i]).every(n => drawnNumbers.has(n))) completedLines.push({ type: 'column', index: i });
     }
 
     let diag1 = true;
     for (let i = 0; i < SIZE; i++) {
       if (!drawnNumbers.has(boardData[i][i])) { diag1 = false; break; }
     }
-    if (diag1) count++;
+    if (diag1) completedLines.push({ type: 'diagonal' });
 
     let diag2 = true;
     for (let i = 0; i < SIZE; i++) {
       if (!drawnNumbers.has(boardData[i][SIZE - 1 - i])) { diag2 = false; break; }
     }
-    if (diag2) count++;
+    if (diag2) completedLines.push({ type: 'anti-diagonal' });
 
+    const count = completedLines.length;
+    renderBingoLines(completedLines);
     document.getElementById('bingo-count').innerText = count;
 
     if (gamePhase === 'playing' && count >= targetBingoCount) {
@@ -518,6 +582,13 @@
   }
 
   socket.on('numberSelected', (data) => {
+    const hasSelectedItem = itemLabels.has(data.number);
+    const label = data.numberLabel ?? itemLabels.get(data.number) ?? String(data.number);
+    const notice = document.getElementById('selection-notice');
+    notice.className = `selection-notice ${hasSelectedItem ? 'present' : 'missing'}`;
+    notice.innerText = hasSelectedItem
+      ? `${data.selectedBy ?? '참가자'}님이 “${label}”을(를) 선택했습니다.`
+      : `${data.selectedBy ?? '상대방'}님이 선택한 “${label}”은(는) 내 빙고판에 없습니다.`;
     drawnNumbers = new Set(data.drawnNumbers);
     currentTurnPlayerName = data.nextTurn;
     document.getElementById('current-turn').innerText = data.nextTurn;
@@ -525,13 +596,25 @@
   });
 
   socket.on('gameOver', (msg) => {
+    clearInterval(preparationInterval);
+    preparationInterval = null;
+    gamePhase = 'finished';
+    boardConfirmed = true;
+    updatePreparationControls();
+    document.getElementById('game-result-message').innerText = msg;
+    document.getElementById('game-result-modal').style.display = 'flex';
+  });
+
+  function returnToLobby() {
     resetPreparation();
-    alert(msg);
     boardData = [];
     drawnNumbers.clear();
+    clearSelectionNotice();
+    renderBingoLines([]);
+    document.getElementById('game-result-modal').style.display = 'none';
     document.getElementById('game-area').style.display = 'none';
     document.getElementById('lobby-area').style.display = 'block';
-  });
+  }
 
   socket.on('playerLeft', (data) => {
     if (data.players.length === 0) {

@@ -97,6 +97,9 @@ test(`서버 ${size}×${size}: 개별 추첨, 준비, 확정, 본인 항목 검�
   assert.equal(count('numberSelected'), 0);
   host.selectNumber(id);
   assert.equal(count('numberSelected'), 1);
+  const firstSelection = events.filter(event => event.name === 'numberSelected').at(-1).data;
+  assert.equal(firstSelection.numberLabel, start.boardItems.find(item => item.id === id).label);
+  assert.equal(firstSelection.selectedBy, 'host');
   assert.ok(!guestItems.some(item => item.id === id));
   assert.equal(events.at(-1).data.nextTurn, 'guest');
   guest.selectNumber(guestItems.at(-1).id);
@@ -290,11 +293,40 @@ test('프론트엔드: 과자 표시, 배치만 변경, 확정 잠금, ID 선택
   board.children[0].onclick();
   assert.equal(emitted.at(-1).data, items.find(item => item.label === labels[0]).id);
   const absent = pools.snacks.find(item => !items.some(own => own.id === item.id));
-  handlers.numberSelected({ drawnNumbers: [absent.id], nextTurn: 'guest' });
+  handlers.numberSelected({
+    number: absent.id,
+    numberLabel: absent.label,
+    selectedBy: '엄마',
+    drawnNumbers: [absent.id],
+    nextTurn: 'guest'
+  });
   assert.ok(board.children.every(cell => !cell.className.includes('selected')));
+  assert.equal(elements.get('selection-notice').className, 'selection-notice missing');
+  assert.ok(elements.get('selection-notice').innerText.includes(`“${absent.label}”`));
+  assert.ok(elements.get('selection-notice').innerText.includes('내 빙고판에 없습니다'));
   assert.equal(elements.get('bingo-count').innerText, 0);
   assert.equal(elements.get('current-turn').innerText, 'guest');
-  handlers.numberSelected({ drawnNumbers: items.map(item => item.id), nextTurn: 'guest' });
+  handlers.numberSelected({
+    number: items[0].id,
+    numberLabel: items[0].label,
+    selectedBy: '아빠',
+    drawnNumbers: items.map(item => item.id),
+    nextTurn: 'guest'
+  });
+  assert.equal(elements.get('selection-notice').className, 'selection-notice present');
+  assert.equal(elements.get('bingo-lines').children.length, 8);
   assert.equal(emitted.at(-1).name, 'claimBingo');
   assert.equal(emitted.at(-1).data.bingoCount, 8);
+  const completedBoardCells = board.children.length;
+  handlers.gameOver('엄마님이 승리했습니다!');
+  assert.equal(elements.get('game-result-modal').style.display, 'flex');
+  assert.equal(elements.get('game-result-message').innerText, '엄마님이 승리했습니다!');
+  assert.equal(board.children.length, completedBoardCells);
+  assert.equal(elements.get('bingo-lines').children.length, 8);
+  assert.equal(elements.get('game-area').style.display, 'block');
+  vm.runInContext('returnToLobby()', context);
+  assert.equal(elements.get('game-result-modal').style.display, 'none');
+  assert.equal(elements.get('game-area').style.display, 'none');
+  assert.equal(elements.get('lobby-area').style.display, 'block');
+  assert.equal(elements.get('bingo-lines').children.length, 0);
 });

@@ -48,6 +48,7 @@ function createRoomState(id, password, creatorId) {
     currentTurnIndex: 0,
     gameBoardSize: 5,
     playerItemIds: new Map(),
+    playerItemLabels: new Map(),
     isGameStarted: false,
     isPreparing: false,
     preparationTimer: null,
@@ -95,6 +96,7 @@ function resetGame(room) {
   room.isGameStarted = false;
   room.drawnNumbers.clear();
   room.playerItemIds.clear();
+  room.playerItemLabels.clear();
   room.currentTurnIndex = 0;
 }
 
@@ -114,6 +116,7 @@ function removeSocketFromRoom(socket, { leaveChannel = false } = {}) {
   room.pendingSocketIds.delete(socket.id);
   room.confirmedPlayers.delete(socket.id);
   room.playerItemIds.delete(socket.id);
+  room.playerItemLabels.delete(socket.id);
   socketRoomIds.delete(socket.id);
   if (leaveChannel) socket.leave?.(roomChannel(room.id));
 
@@ -258,6 +261,7 @@ io.on('connection', (socket) => {
 
     room.gameBoardSize = boardSize;
     room.playerItemIds.clear();
+    room.playerItemLabels.clear();
     room.isGameStarted = true;
     room.currentTurnIndex = room.players.findIndex(participant => participant.id === player.id);
     room.drawnNumbers.clear();
@@ -270,6 +274,7 @@ io.on('connection', (socket) => {
     for (const participant of room.players) {
       const boardItems = createBoardItems(category, boardSize);
       room.playerItemIds.set(participant.id, new Set(boardItems.map(item => item.id)));
+      room.playerItemLabels.set(participant.id, new Map(boardItems.map(item => [item.id, item.label])));
       io.to(participant.id).emit('gameStarted', {
         players: room.players,
         preparationEndsAt: room.preparationEndsAt,
@@ -305,10 +310,14 @@ io.on('connection', (socket) => {
     if (!room.playerItemIds.get(socket.id)?.has(number)) return;
 
     if (!room.drawnNumbers.has(number)) {
+      const selectedBy = room.players[room.currentTurnIndex].nickname;
+      const numberLabel = room.playerItemLabels.get(socket.id)?.get(number) ?? String(number);
       room.drawnNumbers.add(number);
       room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
       emitToRoom(room, 'numberSelected', {
         number,
+        numberLabel,
+        selectedBy,
         drawnNumbers: [...room.drawnNumbers],
         nextTurn: room.players[room.currentTurnIndex].nickname
       });
