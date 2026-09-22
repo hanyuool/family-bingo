@@ -22,6 +22,19 @@
     .player-list { list-style: none; padding: 0; margin: 10px 0; text-align: left; }
     .player-list li { padding: 8px 12px; background: #f8f9fa; border: 1px solid #e9ecef; margin-bottom: 4px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
     .badge-host { background: #ff9f43; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    .room-list { display: grid; gap: 10px; margin: 16px 0; }
+    .room-card { padding: 14px; border: 1px solid #dfe6e9; border-radius: 10px; background: #f8f9fa; text-align: left; }
+    .room-card-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .room-name { font-size: 1.05rem; font-weight: bold; }
+    .room-meta { margin-top: 4px; color: #636e72; font-size: 0.85rem; }
+    .room-enter { display: flex; gap: 8px; margin-top: 10px; }
+    .room-enter input { flex: 1; }
+    .room-enter button { width: auto; min-width: 84px; margin-top: 0; }
+    .password-field { display: flex; gap: 8px; }
+    .password-field input { flex: 1; }
+    .password-toggle { width: 46px !important; min-width: 46px !important; margin-top: 0; padding: 10px 6px; background: #636e72; }
+    .room-empty { padding: 22px 10px; color: #636e72; background: #f8f9fa; border-radius: 10px; }
+    .section-note { color: #636e72; font-size: 0.85rem; line-height: 1.5; }
     
     .grid { display: grid; gap: 6px; margin-top: 20px; }
     .cell { width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: #fff; border: 2px solid #ddd; font-size: 1.5rem; font-weight: bold; border-radius: 8px; cursor: pointer; transition: 0.2s; user-select: none; box-sizing: border-box; }
@@ -54,18 +67,35 @@
     <div class="loading-subtext">서버가 휴식 중일 경우 깨어나는 데<br>약 15초 ~ 30초 정도 소요될 수 있습니다. ☕</div>
   </div>
 
-  <!-- 2. 닉네임 입력 화면 -->
-  <div id="login-area" style="display:none;">
+  <!-- 2. 방 선택 화면 -->
+  <div id="room-area" style="display:none;">
+    <h3>게임 방</h3>
+    <div id="room-list" class="room-list"></div>
     <div class="form-group">
-      <label for="nickname">닉네임</label>
-      <input type="text" id="nickname" placeholder="닉네임 입력 (예: 아빠)">
+      <label for="create-password">새 방 비밀번호 (선택)</label>
+      <div class="password-field">
+        <input type="password" id="create-password" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="공개방은 비워두세요">
+        <button type="button" class="password-toggle" aria-label="비밀번호 보기" onclick="togglePasswordVisibility('create-password', this)">👁️</button>
+      </div>
+      <div class="section-note">숫자 4자리로 설정할 수 있으며, 방은 최대 3개까지 열립니다.</div>
     </div>
-    <button onclick="joinLobby()">입장하기</button>
+    <button id="create-room-button" onclick="createRoom()">＋ 새 방 만들기</button>
   </div>
 
-  <!-- 3. 대기실 화면 -->
+  <!-- 3. 닉네임 입력 화면 -->
+  <div id="login-area" style="display:none;">
+    <h3 id="login-room-name">방 입장</h3>
+    <div class="form-group">
+      <label for="nickname">닉네임</label>
+      <input type="text" id="nickname" maxlength="12" placeholder="닉네임 입력 (예: 아빠)">
+    </div>
+    <button onclick="joinLobby()">입장하기</button>
+    <button class="btn-secondary" onclick="leaveRoom()">방 목록으로</button>
+  </div>
+
+  <!-- 4. 대기실 화면 -->
   <div id="lobby-area" style="display:none;">
-    <h3>방 대기실</h3>
+    <h3><span id="lobby-room-name">방</span> 대기실</h3>
     <div class="form-group" id="host-settings" style="display:none;">
       <label for="board-size">빙고판 크기 설정 (방장 전용)</label>
       <select id="board-size">
@@ -92,9 +122,10 @@
     <div id="guest-msg" style="color: #636e72; font-size: 0.9rem; margin-top: 15px;">
       방장이 게임을 시작하기를 기다리고 있습니다...
     </div>
+    <button class="btn-secondary" onclick="leaveRoom()">방 나가기</button>
   </div>
 
-  <!-- 4. 게임 진행 영역 -->
+  <!-- 5. 게임 진행 영역 -->
   <div id="game-area" style="display:none;">
     <div style="text-align: center; font-size: 1.3rem; font-weight: bold; margin-bottom: 15px; color: #2d3436;">
       👤 <span id="my-nickname" style="color: #10ac84;">-</span>
@@ -139,6 +170,8 @@
   let boardConfirmed = false;
   let preparationDeadline = 0;
   let preparationInterval = null;
+  let roomList = [];
+  let currentRoom = null;
 
   function updatePreparationControls() {
     const remaining = Math.max(0, Math.ceil((preparationDeadline - performance.now()) / 1000));
@@ -171,16 +204,135 @@
 
   socket.on('connect', () => {
     document.getElementById('loading-screen').style.display = 'none';
-    document.getElementById('login-area').style.display = 'block';
+    document.getElementById('room-area').style.display = 'block';
   });
 
   socket.on('disconnect', () => {
     resetPreparation();
+    currentRoom = null;
     document.getElementById('loading-screen').style.display = 'flex';
+    document.getElementById('room-area').style.display = 'none';
     document.getElementById('login-area').style.display = 'none';
     document.getElementById('lobby-area').style.display = 'none';
     document.getElementById('game-area').style.display = 'none';
     document.querySelector('.loading-text').innerText = '서버와의 연결이 끊어졌습니다. 재연결 중...';
+  });
+
+  function passwordInputId(roomId) {
+    return `room-password-${roomId}`;
+  }
+
+  function togglePasswordVisibility(inputId, button) {
+    const input = document.getElementById(inputId);
+    const showPassword = input.type === 'password';
+    input.type = showPassword ? 'text' : 'password';
+    button.innerText = showPassword ? '🙈' : '👁️';
+    button.setAttribute('aria-label', showPassword ? '비밀번호 숨기기' : '비밀번호 보기');
+  }
+
+  function renderRooms() {
+    const list = document.getElementById('room-list');
+    list.innerHTML = '';
+    if (roomList.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'room-empty';
+      empty.innerText = '열린 방이 없습니다. 새 방을 만들어보세요!';
+      list.appendChild(empty);
+    }
+
+    roomList.forEach(room => {
+      const card = document.createElement('div');
+      card.className = 'room-card';
+
+      const top = document.createElement('div');
+      top.className = 'room-card-top';
+      const name = document.createElement('span');
+      name.className = 'room-name';
+      name.innerText = `${room.hasPassword ? '🔒 ' : '🔓 '}${room.name}`;
+      const state = document.createElement('span');
+      state.className = room.isGameStarted ? 'badge-host' : '';
+      state.innerText = room.isGameStarted ? '게임 중' : `${room.playerCount}명`;
+      top.appendChild(name);
+      top.appendChild(state);
+      card.appendChild(top);
+
+      const meta = document.createElement('div');
+      meta.className = 'room-meta';
+      meta.innerText = room.hasPassword ? '비밀번호가 필요한 방입니다.' : '누구나 입장할 수 있습니다.';
+      card.appendChild(meta);
+
+      const controls = document.createElement('div');
+      controls.className = 'room-enter';
+      if (room.hasPassword) {
+        const password = document.createElement('input');
+        password.type = 'password';
+        password.inputMode = 'numeric';
+        password.maxLength = 4;
+        password.id = passwordInputId(room.id);
+        password.placeholder = '비밀번호 4자리';
+        controls.appendChild(password);
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'password-toggle';
+        toggle.innerText = '👁️';
+        toggle.setAttribute('aria-label', '비밀번호 보기');
+        toggle.onclick = () => togglePasswordVisibility(password.id, toggle);
+        controls.appendChild(toggle);
+      }
+      const enter = document.createElement('button');
+      enter.innerText = room.isGameStarted ? '진행 중' : '입장';
+      enter.disabled = room.isGameStarted;
+      enter.onclick = () => enterRoom(room.id);
+      controls.appendChild(enter);
+      card.appendChild(controls);
+      list.appendChild(card);
+    });
+
+    document.getElementById('create-room-button').disabled = roomList.length >= 3;
+  }
+
+  socket.on('roomsUpdated', (rooms) => {
+    roomList = rooms;
+    renderRooms();
+  });
+
+  function createRoom() {
+    const password = document.getElementById('create-password').value.trim();
+    if (password && !/^\d{4}$/.test(password)) return alert('비밀번호는 숫자 4자리로 입력해주세요.');
+    socket.emit('createRoom', { password });
+  }
+
+  function enterRoom(roomId) {
+    const room = roomList.find(candidate => candidate.id === roomId);
+    const password = room?.hasPassword
+      ? document.getElementById(passwordInputId(roomId)).value.trim()
+      : '';
+    if (room?.hasPassword && !/^\d{4}$/.test(password)) return alert('비밀번호 4자리를 입력해주세요.');
+    socket.emit('enterRoom', { roomId, password });
+  }
+
+  socket.on('roomEntered', ({ room }) => {
+    currentRoom = room;
+    document.getElementById('room-area').style.display = 'none';
+    document.getElementById('login-area').style.display = 'block';
+    document.getElementById('login-room-name').innerText = `${room.name} 입장`;
+    document.getElementById('lobby-room-name').innerText = room.name;
+  });
+
+  function leaveRoom() {
+    socket.emit('leaveRoom');
+  }
+
+  socket.on('roomLeft', () => {
+    resetPreparation();
+    currentRoom = null;
+    myNickname = '';
+    players = [];
+    document.getElementById('nickname').value = '';
+    document.getElementById('login-area').style.display = 'none';
+    document.getElementById('lobby-area').style.display = 'none';
+    document.getElementById('game-area').style.display = 'none';
+    document.getElementById('room-area').style.display = 'block';
   });
 
   function joinLobby() {
@@ -192,6 +344,8 @@
 
   socket.on('joinedSuccess', (data) => {
     isHost = data.isHost;
+    currentRoom = data.room;
+    document.getElementById('lobby-room-name').innerText = data.room.name;
     document.getElementById('login-area').style.display = 'none';
     document.getElementById('lobby-area').style.display = 'block';
   });
@@ -209,6 +363,8 @@
 
   // 대기실 참가자 목록 업데이트
   socket.on('updateLobby', (data) => {
+    currentRoom = data.room || currentRoom;
+    if (currentRoom) document.getElementById('lobby-room-name').innerText = currentRoom.name;
     players = data.players;
     renderScores();
     const listEl = document.getElementById('player-list-ul');

@@ -9,194 +9,327 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
-let players = [];
-let drawnNumbers = new Set();
-let currentTurnIndex = 0;
-let gameBoardSize = 5;
-const playerItemIds = new Map();
-let isGameStarted = false;
-let isPreparing = false;
-let preparationTimer = null;
-let preparationEndsAt = 0;
-const confirmedPlayers = new Set();
+const MAX_ROOMS = 3;
+const rooms = new Map();
+const socketRoomIds = new Map();
 
-function finishPreparation() {
-  if (!isGameStarted || !isPreparing) return;
-  clearTimeout(preparationTimer);
-  preparationTimer = null;
-  isPreparing = false;
-  io.emit('playStarted', { currentTurn: players[currentTurnIndex].nickname });
+function roomChannel(roomId) {
+  return `room:${roomId}`;
 }
 
-function broadcastPreparation() {
-  io.emit('preparationUpdated', { confirmedPlayerIds: [...confirmedPlayers] });
-  if (players.every(player => confirmedPlayers.has(player.id))) finishPreparation();
+function publicRoom(room) {
+  return {
+    id: room.id,
+    name: `${room.id}번 방`,
+    hasPassword: Boolean(room.password),
+    playerCount: room.players.length,
+    isGameStarted: room.isGameStarted
+  };
 }
 
-function broadcastLobby() {
-  io.emit('updateLobby', { players, hostId: players.find(player => player.isHost)?.id });
+function roomList() {
+  return [...rooms.values()]
+    .sort((a, b) => Number(a.id) - Number(b.id))
+    .map(publicRoom);
+}
+
+function broadcastRooms() {
+  io.emit('roomsUpdated', roomList());
+}
+
+function createRoomState(id, password, creatorId) {
+  return {
+    id,
+    password,
+    creatorId,
+    pendingSocketIds: new Set([creatorId]),
+    players: [],
+    drawnNumbers: new Set(),
+    currentTurnIndex: 0,
+    gameBoardSize: 5,
+    playerItemIds: new Map(),
+    isGameStarted: false,
+    isPreparing: false,
+    preparationTimer: null,
+    preparationEndsAt: 0,
+    confirmedPlayers: new Set()
+  };
+}
+
+function roomForSocket(socketId) {
+  return rooms.get(socketRoomIds.get(socketId));
+}
+
+function emitToRoom(room, event, data) {
+  io.to(roomChannel(room.id)).emit(event, data);
+}
+
+function finishPreparation(room) {
+  if (!room.isGameStarted || !room.isPreparing || room.players.length === 0) return;
+  clearTimeout(room.preparationTimer);
+  room.preparationTimer = null;
+  room.isPreparing = false;
+  emitToRoom(room, 'playStarted', { currentTurn: room.players[room.currentTurnIndex].nickname });
+}
+
+function broadcastPreparation(room) {
+  emitToRoom(room, 'preparationUpdated', { confirmedPlayerIds: [...room.confirmedPlayers] });
+  if (room.players.length > 0 && room.players.every(player => room.confirmedPlayers.has(player.id))) {
+    finishPreparation(room);
+  }
+}
+
+function broadcastLobby(room) {
+  emitToRoom(room, 'updateLobby', {
+    room: publicRoom(room),
+    players: room.players,
+    hostId: room.players.find(player => player.isHost)?.id
+  });
+}
+
+function resetGame(room) {
+  clearTimeout(room.preparationTimer);
+  room.preparationTimer = null;
+  room.isPreparing = false;
+  room.confirmedPlayers.clear();
+  room.isGameStarted = false;
+  room.drawnNumbers.clear();
+  room.playerItemIds.clear();
+  room.currentTurnIndex = 0;
+}
+
+function assignHost(room, preferredId) {
+  const nextHost = room.players.find(player => player.id === preferredId) || room.players[0];
+  room.players.forEach(player => { player.isHost = player.id === nextHost?.id; });
+  if (nextHost) room.creatorId = nextHost.id;
+}
+
+function removeSocketFromRoom(socket, { leaveChannel = false } = {}) {
+  const room = roomForSocket(socket.id);
+  if (!room) return;
+
+  const turnPlayerId = room.players[room.currentTurnIndex]?.id;
+  const leavingPlayer = room.players.find(player => player.id === socket.id);
+  room.players = room.players.filter(player => player.id !== socket.id);
+  room.pendingSocketIds.delete(socket.id);
+  room.confirmedPlayers.delete(socket.id);
+  room.playerItemIds.delete(socket.id);
+  socketRoomIds.delete(socket.id);
+  if (leaveChannel) socket.leave?.(roomChannel(room.id));
+
+  if (room.players.length === 0 && room.pendingSocketIds.size === 0) {
+    resetGame(room);
+    rooms.delete(room.id);
+    broadcastRooms();
+    return;
+  }
+
+  if (leavingPlayer?.isHost || room.creatorId === socket.id) {
+    const successorId = room.players[0]?.id || room.pendingSocketIds.values().next().value;
+    room.creatorId = successorId;
+    assignHost(room, successorId);
+  }
+
+  if (room.isGameStarted && leavingPlayer) {
+    if (room.players.length === 0) {
+      resetGame(room);
+    } else {
+      const remainingTurnIndex = room.players.findIndex(player => player.id === turnPlayerId);
+      room.currentTurnIndex = remainingTurnIndex >= 0
+        ? remainingTurnIndex
+        : room.currentTurnIndex % room.players.length;
+      emitToRoom(room, 'playerLeft', {
+        players: room.players,
+        currentTurn: room.players[room.currentTurnIndex]?.nickname,
+        drawnNumbers: [...room.drawnNumbers]
+      });
+      if (room.isPreparing) broadcastPreparation(room);
+    }
+  }
+
+  broadcastLobby(room);
+  broadcastRooms();
 }
 
 io.on('connection', (socket) => {
-  // 플레이어 참가
-  socket.on('joinGame', (nickname) => {
-    if (isGameStarted) {
-      socket.emit('errorMsg', '이미 게임이 진행 중입니다. 다음 게임을 기다려주세요.');
+  socket.emit('roomsUpdated', roomList());
+
+  socket.on('createRoom', ({ password = '' } = {}) => {
+    if (socketRoomIds.has(socket.id)) return;
+    if (rooms.size >= MAX_ROOMS) {
+      socket.emit('errorMsg', '방은 최대 3개까지 만들 수 있습니다.');
+      return;
+    }
+    if (password !== '' && !/^\d{4}$/.test(password)) {
+      socket.emit('errorMsg', '비밀번호는 숫자 4자리로 설정해주세요.');
       return;
     }
 
-    if (players.some(p => p.id === socket.id)) return;
-
-    // 첫 참가자가 방장
-    const isHost = players.length === 0;
-    const player = { id: socket.id, nickname, isHost, wins: 0 };
-    players.push(player);
-
-    // 전체 플레이어 목록 전송
-    broadcastLobby();
-
-    socket.emit('joinedSuccess', { isHost });
+    const roomId = ['1', '2', '3'].find(id => !rooms.has(id));
+    const room = createRoomState(roomId, password, socket.id);
+    rooms.set(roomId, room);
+    socketRoomIds.set(socket.id, roomId);
+    socket.join?.(roomChannel(roomId));
+    socket.emit('roomEntered', { room: publicRoom(room), isCreator: true });
+    broadcastRooms();
   });
 
-  // 방장이 게임 시작 버튼을 눌렀을 때
+  socket.on('enterRoom', ({ roomId, password = '' } = {}) => {
+    if (socketRoomIds.has(socket.id)) return;
+    const room = rooms.get(String(roomId));
+    if (!room) {
+      socket.emit('errorMsg', '이미 사라진 방입니다. 방 목록을 확인해주세요.');
+      broadcastRooms();
+      return;
+    }
+    if (room.isGameStarted) {
+      socket.emit('errorMsg', '이미 게임이 진행 중인 방입니다.');
+      return;
+    }
+    if (room.password && password !== room.password) {
+      socket.emit('errorMsg', '비밀번호가 맞지 않습니다.');
+      return;
+    }
+
+    room.pendingSocketIds.add(socket.id);
+    socketRoomIds.set(socket.id, room.id);
+    socket.join?.(roomChannel(room.id));
+    socket.emit('roomEntered', { room: publicRoom(room), isCreator: socket.id === room.creatorId });
+  });
+
+  socket.on('leaveRoom', () => {
+    if (!socketRoomIds.has(socket.id)) return;
+    removeSocketFromRoom(socket, { leaveChannel: true });
+    socket.emit('roomLeft');
+  });
+
+  socket.on('joinGame', (nickname) => {
+    const room = roomForSocket(socket.id);
+    if (!room) {
+      socket.emit('errorMsg', '먼저 방을 선택해주세요.');
+      return;
+    }
+    if (room.isGameStarted) {
+      socket.emit('errorMsg', '이미 게임이 진행 중입니다.');
+      return;
+    }
+    if (room.players.some(player => player.id === socket.id)) return;
+
+    const cleanNickname = typeof nickname === 'string' ? nickname.trim() : '';
+    if (!cleanNickname || cleanNickname.length > 12) {
+      socket.emit('errorMsg', '닉네임은 1~12자로 입력해주세요.');
+      return;
+    }
+    if (room.players.some(player => player.nickname === cleanNickname)) {
+      socket.emit('errorMsg', '이미 사용 중인 닉네임입니다.');
+      return;
+    }
+
+    const isHost = socket.id === room.creatorId;
+    room.players.push({ id: socket.id, nickname: cleanNickname, isHost, wins: 0 });
+    room.pendingSocketIds.delete(socket.id);
+    if (!room.players.some(player => player.isHost) && !room.pendingSocketIds.has(room.creatorId)) {
+      assignHost(room, room.creatorId);
+    }
+    broadcastLobby(room);
+    broadcastRooms();
+    socket.emit('joinedSuccess', { isHost, room: publicRoom(room) });
+  });
+
   socket.on('startGame', (settings) => {
-    const player = players.find(p => p.id === socket.id);
-    if (!player || !player.isHost) {
+    const room = roomForSocket(socket.id);
+    const player = room?.players.find(participant => participant.id === socket.id);
+    if (!room || !player || !player.isHost) {
       socket.emit('errorMsg', '방장만 게임을 시작할 수 있습니다.');
       return;
     }
-
-    if (isGameStarted) return;
-
-    if (players.length < 2) {
+    if (room.isGameStarted) return;
+    if (room.players.length < 2) {
       socket.emit('errorMsg', '최소 2명 이상 접속해야 게임을 시작할 수 있습니다!');
       return;
     }
 
-    // 기존 숫자 게임 클라이언트의 크기만 보내는 요청도 지원합니다.
     const boardSize = Number(settings?.boardSize ?? settings);
     const category = settings?.category ?? 'numbers';
     if (![3, 4, 5, 6].includes(boardSize) || !['numbers', 'snacks'].includes(category)) {
       socket.emit('errorMsg', '빙고판 크기 또는 카테고리를 확인해주세요.');
       return;
     }
-    gameBoardSize = boardSize;
-    playerItemIds.clear();
-    const targetBingoCount = (gameBoardSize === 5) ? 5 : gameBoardSize;
-    isGameStarted = true;
-    // 매 게임은 현재 방장부터 시작합니다.
-    currentTurnIndex = players.findIndex(participant => participant.id === player.id);
-    drawnNumbers.clear();
-    isPreparing = true;
-    confirmedPlayers.clear();
-    preparationEndsAt = Date.now() + 10000;
-    preparationTimer = setTimeout(finishPreparation, 10000);
 
-    // 참가자마다 독립 추첨한 목록을 해당 참가자에게만 전송합니다.
-    for (const participant of players) {
-      const boardItems = createBoardItems(category, gameBoardSize);
-      playerItemIds.set(participant.id, new Set(boardItems.map(item => item.id)));
+    room.gameBoardSize = boardSize;
+    room.playerItemIds.clear();
+    room.isGameStarted = true;
+    room.currentTurnIndex = room.players.findIndex(participant => participant.id === player.id);
+    room.drawnNumbers.clear();
+    room.isPreparing = true;
+    room.confirmedPlayers.clear();
+    room.preparationEndsAt = Date.now() + 10000;
+    room.preparationTimer = setTimeout(() => finishPreparation(room), 10000);
+    const targetBingoCount = boardSize === 5 ? 5 : boardSize;
+
+    for (const participant of room.players) {
+      const boardItems = createBoardItems(category, boardSize);
+      room.playerItemIds.set(participant.id, new Set(boardItems.map(item => item.id)));
       io.to(participant.id).emit('gameStarted', {
-        players,
-        preparationEndsAt,
+        players: room.players,
+        preparationEndsAt: room.preparationEndsAt,
         preparationDuration: 10000,
-        boardSize: gameBoardSize,
+        boardSize,
         category,
         boardItems,
         targetBingoCount,
-        drawnNumbers: Array.from(drawnNumbers)
+        drawnNumbers: []
       });
     }
+    broadcastRooms();
   });
 
   socket.on('confirmBoard', () => {
-    if (!isPreparing || !players.some(p => p.id === socket.id)) return;
-    if (Date.now() >= preparationEndsAt) {
-      finishPreparation();
+    const room = roomForSocket(socket.id);
+    if (!room?.isPreparing || !room.players.some(player => player.id === socket.id)) return;
+    if (Date.now() >= room.preparationEndsAt) {
+      finishPreparation(room);
       return;
     }
-    confirmedPlayers.add(socket.id);
-    broadcastPreparation();
+    room.confirmedPlayers.add(socket.id);
+    broadcastPreparation(room);
   });
 
-  // 항목 ID 선택 처리 (숫자는 기존 숫자 ID 유지)
-  socket.on('selectNumber', (num) => {
-    if (!isGameStarted || isPreparing) return;
-
-    if (players[currentTurnIndex]?.id !== socket.id) {
+  socket.on('selectNumber', (number) => {
+    const room = roomForSocket(socket.id);
+    if (!room?.isGameStarted || room.isPreparing) return;
+    if (room.players[room.currentTurnIndex]?.id !== socket.id) {
       socket.emit('errorMsg', '아직 본인 턴이 아닙니다!');
       return;
     }
+    if (!room.playerItemIds.get(socket.id)?.has(number)) return;
 
-    if (!playerItemIds.get(socket.id)?.has(num)) return;
-
-    if (!drawnNumbers.has(num)) {
-      drawnNumbers.add(num);
-      currentTurnIndex = (currentTurnIndex + 1) % players.length;
-
-      io.emit('numberSelected', {
-        number: num,
-        drawnNumbers: Array.from(drawnNumbers),
-        nextTurn: players[currentTurnIndex].nickname
+    if (!room.drawnNumbers.has(number)) {
+      room.drawnNumbers.add(number);
+      room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
+      emitToRoom(room, 'numberSelected', {
+        number,
+        drawnNumbers: [...room.drawnNumbers],
+        nextTurn: room.players[room.currentTurnIndex].nickname
       });
     }
   });
 
-  // 빙고 완성 신고
-  socket.on('claimBingo', ({ bingoCount }) => {
-    if (!isGameStarted || isPreparing) return;
-
-    const player = players.find(p => p.id === socket.id);
-    if (Number.isInteger(bingoCount) && bingoCount >= gameBoardSize && player) {
-      isGameStarted = false;
-      drawnNumbers.clear();
-      currentTurnIndex = 0;
+  socket.on('claimBingo', ({ bingoCount } = {}) => {
+    const room = roomForSocket(socket.id);
+    if (!room?.isGameStarted || room.isPreparing) return;
+    const player = room.players.find(participant => participant.id === socket.id);
+    if (Number.isInteger(bingoCount) && bingoCount >= room.gameBoardSize && player) {
+      resetGame(room);
       player.wins += 1;
-      players.forEach(participant => { participant.isHost = participant.id === player.id; });
-      broadcastLobby();
-      io.emit('gameOver', `🎉 ${player.nickname}님이 ${bingoCount}개 빙고를 완성하여 승리했습니다! 🎉`);
+      assignHost(room, player.id);
+      broadcastLobby(room);
+      broadcastRooms();
+      emitToRoom(room, 'gameOver', `🎉 ${player.nickname}님이 ${bingoCount}개 빙고를 완성하여 승리했습니다! 🎉`);
     }
   });
 
-  // 접속 종료 처리
-  socket.on('disconnect', () => {
-    const turnPlayerId = players[currentTurnIndex]?.id;
-    const wasHost = players.find(player => player.id === socket.id)?.isHost;
-    players = players.filter(p => p.id !== socket.id);
-
-    confirmedPlayers.delete(socket.id);
-    playerItemIds.delete(socket.id);
-    if (players.length === 0) {
-      clearTimeout(preparationTimer);
-      preparationTimer = null;
-      isPreparing = false;
-      confirmedPlayers.clear();
-      isGameStarted = false;
-      drawnNumbers.clear();
-      currentTurnIndex = 0;
-    } else if (wasHost) {
-      // 방장이 나가면 다음 사람에게 방장 권한 위임
-      players[0].isHost = true;
-    }
-
-    if (isGameStarted) {
-      if (players.length === 0) {
-        isGameStarted = false;
-        drawnNumbers.clear();
-        currentTurnIndex = 0;
-      } else {
-        const remainingTurnIndex = players.findIndex(p => p.id === turnPlayerId);
-        currentTurnIndex = remainingTurnIndex >= 0 ? remainingTurnIndex : currentTurnIndex % players.length;
-        io.emit('playerLeft', {
-          players,
-          currentTurn: players[currentTurnIndex]?.nickname,
-          drawnNumbers: Array.from(drawnNumbers)
-        });
-        if (isPreparing) broadcastPreparation();
-      }
-    }
-    broadcastLobby();
-  });
+  socket.on('disconnect', () => removeSocketFromRoom(socket));
 });
 
 const PORT = process.env.PORT || 3000;
